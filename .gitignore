@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+desktop.ini
+.DS_Store
+*.pkl
+matrix_*.pkl
