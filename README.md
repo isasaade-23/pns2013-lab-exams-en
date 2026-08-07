@@ -62,7 +62,7 @@ Blocks you will find: laboratory results (`Z*`), sociodemographics (`C*`, `E*`),
 
 ## Analysis code
 
-`pipeline/` contains the modelling code from the **FAPESP–Illinois NCD study**, which used this
+`pipeline/` contains the modelling code from the **FAPESP–Illinois DNCT Project**, which used this
 subsample to predict *measured* hypertension (systolic ≥ 140 or diastolic ≥ 90 mmHg) rather than
 self-reported diagnosis.
 
@@ -72,8 +72,18 @@ self-reported diagnosis.
 | `pipeline3_generic.py` | Splines, ordinal encoding, nested CV, calibration, SHAP, figures |
 | `METHODS_LOG.md` | Methodological log — decisions taken, and the mistakes caught along the way |
 
-The code expects the data at its original path; adjust the paths at the top of each script to
-point at `data/` in this repository.
+Paths resolve relative to the repository root, so the pipeline runs from a fresh clone with no
+editing. Override them with the `PNS2013_DATA` / `PNS2013_DIC` environment variables if your copy
+of the data lives elsewhere.
+
+```bash
+git clone https://github.com/isasaade-23/pns2013-lab-exams-en.git
+cd pns2013-lab-exams-en
+python pipeline/pns2013_hypertension_pipeline2.py undiagnosed prune
+```
+
+There is also a **Colab notebook** that runs the whole pipeline, clones this repository for its
+data, produces figures, and bundles every result into a downloadable `.zip`.
 
 `METHODS_LOG.md` is worth reading before reusing the pipeline. It records, among other things, an
 outcome-leakage bug in which a medication counter was computed before the hypertension-medication
@@ -83,9 +93,9 @@ variable was dropped — inflating AUC to 0.86 with sensitivity 1.000 before cor
 
 | Researcher | Affiliation |
 |---|---|
-| **Xuan Lin** | University of Illinois |
-| **Among** *(surname to be completed)* | University of Illinois |
-| **Isabela Venancio** | Universidade de São Paulo (USP) |
+| **Isabela Venancio da Silva** | Universidade de São Paulo (USP), São Paulo |
+| **Xuan Lin** | University of Illinois Urbana-Champaign (UIUC) |
+| **Amogh Mannava** | University of Illinois Urbana-Champaign (UIUC) |
 
 ## Citation
 
