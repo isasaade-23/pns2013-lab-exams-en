@@ -253,9 +253,17 @@ import os, subprocess, sys
 REPO_URL = "{REPO}"
 REPO     = "/content/pns2013-lab-exams-en"
 
-if not os.path.exists(REPO):
+# Clone, or update a clone this session already has: a session that started
+# before the last commit would otherwise keep running the old pns_modelkit.
+if os.path.exists(REPO):
+    subprocess.run(["git", "-C", REPO, "fetch", "-q", "--depth", "1", "origin", "main"])
+    subprocess.run(["git", "-C", REPO, "reset", "-q", "--hard", "origin/main"])
+else:
     subprocess.run(["git", "clone", "--depth", "1", REPO_URL, REPO], check=True)
 sys.path.insert(0, os.path.join(REPO, "pipeline"))
+
+print("pipeline at", subprocess.run(["git", "-C", REPO, "log", "-1", "--format=%h %s"],
+                                    capture_output=True, text=True).stdout.strip())
 
 DATA     = os.path.join(REPO, "data", "pns2013_lab_exams.xlsx")
 REGISTRY = os.path.join(REPO, "pipeline", "PNS_preprocessing_registry_v1.xlsx")
@@ -300,9 +308,13 @@ downstream reads these.
     tuned_cfg = ("FULL     = False          # True -> 100 trials, the paper run\n"
                  "N_TRIALS = 100 if FULL else 30\n") if model != "tabpfn" else ""
     C.append(code(f"""
+import importlib
 import numpy as np, pandas as pd
-import pns_modelkit as mk
 import pns_preprocess as pp
+import pns_modelkit as mk
+
+# re-import, in case an older copy was imported earlier in this session
+importlib.reload(pp); importlib.reload(mk)
 
 OUTCOME   = "{outcome}"
 MODEL     = "{m['short']}"
