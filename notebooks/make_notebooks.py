@@ -500,41 +500,103 @@ cost of uploading the training rows. Two configurations are reported — the
 default single forward pass and a larger ensemble — which is the TabPFN
 equivalent of the default-versus-tuned comparison the other notebooks run.
 
-**The token.** Stored in Colab's saved keys as `TABPFN_TOKEN`, from
-[platform.priorlabs.ai/account/api-keys](https://platform.priorlabs.ai/account/api-keys).
-The cell reads it from `userdata` and falls back to the environment variable.
+**Two ways to run it.** `BACKEND = "api"` sends the design matrix to the Prior
+Labs API and needs a token. `BACKEND = "local"` runs the open-weights model in
+the session, needs no token, and wants a GPU runtime
+(Runtime → Change runtime type → T4). The local path is the one to take when the
+token is refused.
 
-**What leaves the session.** The encoded design matrix, sent to the Prior Labs
-API. Public IBGE microdata, so acceptable here. The offline alternative — the
-open-weights `tabpfn` package on a Colab GPU — is in the commented block at the
-bottom of the cell.
+**The token.** Colab saved keys, named `TABPFN_TOKEN`, generated at
+[platform.priorlabs.ai/account/api-keys](https://platform.priorlabs.ai/account/api-keys).
+An account password or an old key gives `HTTP 401 Invalid token`. The cell below
+checks the token with one cheap authenticated call **before** any training run,
+so a bad key fails in two seconds rather than halfway through the fit.
+
+**What leaves the session.** On the API path, the encoded design matrix. PNS 2013
+is public IBGE microdata, so that is acceptable here and would not be for
+identifiable data. On the local path, nothing leaves.
 """))
         C.append(code("""
 import os
-try:
-    from google.colab import userdata
-    os.environ["TABPFN_TOKEN"] = userdata.get("TABPFN_TOKEN")
-except Exception as e:
-    print("no Colab saved key found, falling back to the environment:", e)
 
-assert os.environ.get("TABPFN_TOKEN"), "TABPFN_TOKEN is not set"
+BACKEND = "api"            # "api" or "local"
+INTERACTIVE_LOGIN = False  # True -> log in through the browser instead of a token
 
-import tabpfn_client
-tabpfn_client.set_access_token(os.environ["TABPFN_TOKEN"])
-from tabpfn_client import TabPFNClassifier
-print("tabpfn-client ready; model_path='auto' uses the current release")
+if BACKEND == "api":
+    token = os.environ.get("TABPFN_TOKEN", "")
+    try:
+        from google.colab import userdata
+        token = userdata.get("TABPFN_TOKEN") or token
+    except Exception as e:
+        print("no Colab saved key read:", e)
+    token = (token or "").strip()          # a trailing newline is enough to fail
+    os.environ["TABPFN_TOKEN"] = token
+    print(f"token: {len(token)} characters, ending {token[-4:] if token else '(none)'}")
+
+    import tabpfn_client
+    if INTERACTIVE_LOGIN:
+        tabpfn_client.interactive_login()
+    elif token:
+        tabpfn_client.set_access_token(token)
+
+    # one small authenticated call, to fail fast and legibly
+    try:
+        from tabpfn_client import UserDataClient
+        check = UserDataClient.get_data_summary
+    except (ImportError, AttributeError) as e:
+        check = None
+        print("no cheap validation call in this client version:", e)
+
+    try:
+        if check:
+            check()
+            print("token accepted")
+    except Exception as e:
+        raise SystemExit(
+            f"the API refused this token ({type(e).__name__}: {e}).\\n"
+            "Three ways out:\\n"
+            "  1. generate a key at platform.priorlabs.ai/account/api-keys and put\\n"
+            "     it in the Colab saved keys as TABPFN_TOKEN, enabled for this\\n"
+            "     notebook. An account password is not an API key.\\n"
+            "  2. set INTERACTIVE_LOGIN = True and re-run this cell to log in\\n"
+            "     through the browser.\\n"
+            "  3. set BACKEND = 'local' and re-run: open weights, no token, GPU\\n"
+            "     runtime recommended.")
+
+    from tabpfn_client import TabPFNClassifier
+    print("tabpfn-client ready; model_path='auto' uses the current release")
+else:
+    import subprocess, sys
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "tabpfn"], check=True)
+    from tabpfn import TabPFNClassifier
+    try:
+        import torch
+        print("local TabPFN ready; device:",
+              "cuda" if torch.cuda.is_available() else "cpu (slow, use a GPU runtime)")
+    except Exception:
+        print("local TabPFN ready")
 """))
         C.append(code("""
 from sklearn.pipeline import Pipeline
 
 def make_tabpfn(**kw):
-    \"\"\"balance_probabilities matters here: 3.8% prevalence for diabetes.
-    Older client versions do not take it, so fall back rather than fail.\"\"\"
-    try:
-        return TabPFNClassifier(model_path="auto", balance_probabilities=True,
-                                random_state=mk.RS, **kw)
-    except TypeError:
-        return TabPFNClassifier(model_path="auto", random_state=mk.RS, **kw)
+    \"\"\"One classifier, whichever backend section 4 set up.
+
+    balance_probabilities matters here: the diabetes cohort is 3.8% positive.
+    The two backends do not take the same arguments, and client versions differ
+    among themselves, so each keyword is dropped rather than allowed to fail.\"\"\"
+    if BACKEND == "local":
+        kw.setdefault("device", "auto")
+    else:
+        kw.setdefault("model_path", "auto")
+    for attempt in ({"balance_probabilities": True, "random_state": mk.RS, **kw},
+                    {"random_state": mk.RS, **kw},
+                    kw):
+        try:
+            return TabPFNClassifier(**attempt)
+        except TypeError:
+            continue
+    return TabPFNClassifier()
 
 pipe_def = Pipeline([("prep", preproc()), ("clf", make_tabpfn())])
 pipe_def.fit(Xtr, ytr)
@@ -548,12 +610,8 @@ row_tuned, p_tuned = mk.evaluate(pipe_tuned, Xte, yte, "TabPFN (ensemble 8)")
 print(f"ensemble test AUC {row_tuned['AUC_test']:.3f} "
       f"[{row_tuned['AUC_lo']:.3f}, {row_tuned['AUC_hi']:.3f}]")
 
-BEST_MODEL, BEST_P, BEST_PARAMS = pipe_tuned, p_tuned, {"n_estimators": 8}
-
-# Offline alternative, no data leaves the session, needs a GPU runtime:
-#   !pip install -q tabpfn
-#   from tabpfn import TabPFNClassifier as LocalTabPFN
-#   pipe = Pipeline([("prep", preproc()), ("clf", LocalTabPFN(device="cuda"))])
+BEST_MODEL, BEST_P, BEST_PARAMS = pipe_tuned, p_tuned, {"n_estimators": 8,
+                                                        "backend": BACKEND}
 """))
         C.append(md("""
 **A 5-fold CV score, for comparability with the other three notebooks.** Five
