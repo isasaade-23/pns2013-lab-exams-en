@@ -655,6 +655,30 @@ if pushed is None:
         print(e)
 """))
 
+    C.append(md("""
+## 6.1 · Re-push a run that is already on disk
+
+**What this does.** Sends the folder the cell above wrote, without refitting
+anything. Use it when the export did not push: a session that cloned before the
+last commit and ran an older `pns_modelkit`, a missing token, a connection that
+dropped. Set `RETRY_PUSH = True` and run this cell alone.
+
+**What to look for.** The link it prints. If it says no token, add `GITHUB_TOKEN`
+to the Colab saved keys and run it again — the results are on disk either way,
+and nothing has to be recomputed.
+"""))
+    C.append(code("""
+RETRY_PUSH = False
+
+if RETRY_PUSH:
+    import importlib
+    subprocess.run(["git", "-C", REPO, "fetch", "-q", "--depth", "1", "origin", "main"])
+    subprocess.run(["git", "-C", REPO, "reset", "-q", "--hard", "origin/main"])
+    import pns_modelkit as mk
+    importlib.reload(mk)
+    mk.push_results(os.path.join(OUTDIR, OUTCOME, MODEL))
+"""))
+
     nb = {"cells": C,
           "metadata": {"colab": {"provenance": [], "toc_visible": True},
                        "kernelspec": {"display_name": "Python 3", "name": "python3"},
