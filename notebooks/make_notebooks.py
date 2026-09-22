@@ -701,8 +701,12 @@ into the comparison table without further bookkeeping.
 which is private — these are unpublished results. It needs a GitHub token in
 the Colab saved keys named `GITHUB_TOKEN`: a fine-grained token with
 **Contents: read and write** on that repository, enabled for this notebook.
-Without a token, or with `PUSH_RESULTS = False`, the run zips itself and
-downloads instead.
+Without a token, or with `PUSH_RESULTS = False`, the run zips itself into
+`outputs/models/` instead, next to the folder it just wrote. That zip only goes
+through the browser when there is nowhere durable to keep it: with
+`MOUNT_DRIVE = True` it lands in the shared folder and nothing is downloaded,
+and without Drive it lives on the session disk, which dies with the session, so
+a copy is downloaded as well.
 """))
     C.append(code("""
 PUSH_RESULTS = True        # False -> zip and download instead
@@ -720,12 +724,19 @@ if PUSH_RESULTS:
         print("not pushed:", e)
 
 if pushed is None:
-    z = mk.zip_folder(folder, f"/content/{OUTCOME}_{MODEL}.zip")
-    try:
-        from google.colab import files
-        files.download(z)
-    except Exception as e:
-        print(e)
+    # The zip goes next to the outputs, not through the browser. Only when the
+    # outputs are on the session disk, which dies with the session, is there any
+    # reason to download it.
+    z = mk.zip_folder(folder, os.path.join(OUTDIR, f"{OUTCOME}_{MODEL}.zip"))
+    if os.path.isdir(DRIVE):
+        print("kept in the shared folder:", z)
+    else:
+        print("session disk only, so downloading a copy as well:", z)
+        try:
+            from google.colab import files
+            files.download(z)
+        except Exception as e:
+            print(e)
 """))
 
     C.append(md("""
