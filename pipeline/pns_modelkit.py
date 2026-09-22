@@ -18,6 +18,7 @@ What is here
     permutation_report()  per feature and summed per registry block
     plot_roc(), plot_calibration(), plot_importance()
     export()          one run, one folder, one tidy metrics row
+    push_results()    that folder, committed to the private run repository
 
 Usage in a notebook
     import pns_modelkit as mk
@@ -457,6 +458,91 @@ def export(outdir, outcome, model_name, bundle, metrics, importance=None,
 
     print(f"wrote {folder}")
     return folder
+
+
+RUNS_REPO = "isasaade-23/pns2013-model-runs"
+
+
+def push_results(folder, token=None, repo=RUNS_REPO, message=None,
+                 workdir="/content/_runs", attempts=3):
+    """Commit one run folder to the private run-output repository.
+
+    The outputs are small — a metrics row, two importance tables, three
+    figures, a text report — and belong somewhere that is neither a Drive
+    mount nor a zip in the Downloads folder. `repo` is private, which is the
+    point: these are unpublished results.
+
+    The token comes from Colab's saved keys (`GITHUB_TOKEN`) or the
+    environment. It is used to build the remote URL and is never written into
+    the repository: the remote is rewritten to a tokenless URL before the
+    function returns.
+
+    Each run writes to its own path, so twelve notebooks pushing in parallel
+    do not collide on content. They can still collide on the branch tip, so a
+    rejected push rebases on the remote and tries again.
+    """
+    import shutil
+    import subprocess
+
+    token = token or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        try:
+            from google.colab import userdata
+            token = userdata.get("GITHUB_TOKEN")
+        except Exception:
+            pass
+    if not token:
+        raise RuntimeError(
+            "no GITHUB_TOKEN. Add a fine-grained token with Contents: "
+            f"read and write on {repo} to the Colab saved keys, named "
+            "GITHUB_TOKEN, and enable it for this notebook.")
+
+    auth = f"https://{token}@github.com/{repo}.git"
+    clean = f"https://github.com/{repo}.git"
+
+    def git(*args, cwd=workdir, check=True):
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+        if check and r.returncode:
+            raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()}")
+        return r
+
+    if not os.path.isdir(os.path.join(workdir, ".git")):
+        shutil.rmtree(workdir, ignore_errors=True)
+        r = subprocess.run(["git", "clone", "--depth", "1", auth, workdir],
+                           capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError(f"clone failed: {r.stderr.replace(token, '***').strip()}")
+    git("remote", "set-url", "origin", auth)
+    git("config", "user.email", "noreply@users.noreply.github.com")
+    git("config", "user.name", "pns2013 model runs")
+
+    rel = os.path.join("outputs", "models",
+                       *os.path.normpath(folder).split(os.sep)[-2:])
+    dest = os.path.join(workdir, rel)
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(folder, dest)
+
+    git("add", "-A")
+    if not git("diff", "--cached", "--quiet", check=False).returncode:
+        print("nothing changed, nothing pushed")
+        git("remote", "set-url", "origin", clean)
+        return None
+
+    git("commit", "-m", message or f"Run: {rel.replace(os.sep, '/')}")
+    for i in range(attempts):
+        if git("push", "origin", "HEAD:main", check=False).returncode == 0:
+            break
+        print(f"push rejected, rebasing on the remote (attempt {i + 1})")
+        git("pull", "--rebase", "origin", "main", check=False)
+    else:
+        git("remote", "set-url", "origin", clean)
+        raise RuntimeError("could not push after rebasing; pull and retry by hand")
+
+    git("remote", "set-url", "origin", clean)
+    url = f"https://github.com/{repo}/tree/main/{rel.replace(os.sep, '/')}"
+    print(f"pushed {rel.replace(os.sep, '/')}")
+    print(url)
+    return url
 
 
 def zip_folder(folder, out_zip):

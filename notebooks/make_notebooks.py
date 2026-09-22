@@ -610,14 +610,31 @@ One folder per run, under `outputs/models/<outcome>/<family>/`: the metrics row,
 the importance tables, the best parameters, the figures and a plain-text report
 carrying the build hashes. The metrics files from the twelve runs concatenate
 into the comparison table without further bookkeeping.
+
+**Where it goes.** `PUSH_RESULTS = True` commits the folder to
+[isasaade-23/pns2013-model-runs](https://github.com/isasaade-23/pns2013-model-runs),
+which is private — these are unpublished results. It needs a GitHub token in
+the Colab saved keys named `GITHUB_TOKEN`: a fine-grained token with
+**Contents: read and write** on that repository, enabled for this notebook.
+Without a token, or with `PUSH_RESULTS = False`, the run zips itself and
+downloads instead.
 """))
     C.append(code("""
+PUSH_RESULTS = True        # False -> zip and download instead
+
 folder = mk.export(OUTDIR, OUTCOME, MODEL, bundle, results,
                    importance=imp, blocks=blocks_imp, best_params=BEST_PARAMS,
                    figures=[("roc", fig_roc), ("calibration", fig_cal),
                             ("importance", fig_imp)])
 
-if not os.path.isdir(DRIVE):
+pushed = None
+if PUSH_RESULTS:
+    try:
+        pushed = mk.push_results(folder)
+    except Exception as e:
+        print("not pushed:", e)
+
+if pushed is None:
     z = mk.zip_folder(folder, f"/content/{OUTCOME}_{MODEL}.zip")
     try:
         from google.colab import files
