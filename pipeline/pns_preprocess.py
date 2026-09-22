@@ -61,8 +61,10 @@ OUTCOMES = {
         default_threshold=(140, 90),
         alt_thresholds={"acc_aha_2017": (130, 80)},
         threshold_authority="WHO 2021 and Diretrizes Brasileiras de Hipertensao Arterial 2020, identical at 140/90",
-        gate="Q002", gate_map={1: 1, 2: 1, 3: 0},
-        condition_specific=["dx_hypertension", "med_hypertension_2w", "last_bp_measure"],
+        # code 2 is "only during pregnancy". Gestational hypertension is a
+        # different condition, so the row leaves the base rather than counting
+        # as diagnosed (group decision, 22/09/2026).
+        gate="Q002", gate_map={1: 1, 2: np.nan, 3: 0},
         label="Elevated measured blood pressure",
     ),
     "diabetes": dict(
@@ -71,8 +73,7 @@ OUTCOMES = {
         default_threshold=(6.5,),
         alt_thresholds={"who_iec_prediabetes": (6.0,), "ada_prediabetes": (5.7,)},
         threshold_authority="SBD 2026 and WHO, HbA1c >= 6.5. PNS 2013 has no fasting glucose",
-        gate="Q030", gate_map={1: 1, 2: 1, 3: 0},   # note 2: pregnancy-only coded as diagnosed, per Q002
-        condition_specific=["dx_diabetes", "med_diabetes_2w", "last_glucose_test"],
+        gate="Q030", gate_map={1: 1, 2: np.nan, 3: 0},   # code 2, gestational, leaves the base as Q002 does
         label="HbA1c at or above threshold",
     ),
     "cholesterol": dict(
@@ -82,7 +83,6 @@ OUTCOMES = {
         alt_thresholds={"tc_190": (190,)},
         threshold_authority="Conventional screening cut. SBC uses risk-stratified LDL targets rather than one diagnostic value",
         gate="Q060", gate_map={1: 1, 2: 0},
-        condition_specific=["dx_cholesterol"],
         label="Total cholesterol at or above threshold",
     ),
 }
@@ -231,8 +231,14 @@ def build_matrix(data_path, registry_path, outcome, threshold=None,
                 raw.loc[(raw[col] < lo) | (raw[col] > hi), col] = np.nan
                 say(f"  range guard: {col} had {bad} values outside [{lo}, {hi}], set to NaN")
 
+    # P005: 1 pregnant, 3 does not know. Both leave, because an undefined
+    # pregnancy is not a known non-pregnancy (group decision, 22/09/2026).
+    n0 = len(raw)
     raw = raw[raw["P005"] != 1].copy()
-    attr.append(("after excluding pregnancy (P005=1)", len(raw)))
+    attr.append(("after excluding pregnant women (P005=1)", len(raw)))
+    raw = raw[raw["P005"] != 3].copy()
+    attr.append(("after excluding undefined pregnancy (P005=3)", len(raw)))
+    say(f"  pregnancy: {n0 - len(raw)} rows excluded (P005 in 1, 3)")
 
     have = raw[cfg["sources"]].notna().all(axis=1)
     raw = raw[have].copy()
@@ -337,8 +343,15 @@ def build_matrix(data_path, registry_path, outcome, threshold=None,
     # Leakage is per outcome. dx_diabetes is a legitimate predictor of blood
     # pressure and the gate of the diabetes model. One tier column cannot
     # express that, so the registry carries three.
+    # The list of condition-specific columns is read from the registry, not
+    # declared here: leak_<outcome> = 1 means "drop for this outcome". Keeping it
+    # in code meant a variable decision lived outside the workbook, and meant the
+    # list could name med_diabetes_2w, which the dropped sheet had already
+    # retired. One column per outcome expresses per-outcome leakage; a
+    # hard-coded list cannot.
     leak_col = f"leak_{outcome}"
-    tier1 = [c for c in X.columns if c in cfg["condition_specific"]]
+    tier1 = [c for c in X.columns
+             if c in set(reg.loc[reg[leak_col] == 1, "final_name"])]
     if keep_condition_specific:
         say(f"\nSTEP 8 | --keep-condition-specific: retained {tier1}. Diagnostic only.")
         tier1 = []

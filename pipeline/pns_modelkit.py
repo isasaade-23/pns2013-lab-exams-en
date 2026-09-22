@@ -45,14 +45,18 @@ import pns_preprocess as pp
 
 RS = 42
 
-# The three frozen builds, as verified on the real file and reported to the
-# group on 15/09/2026. A notebook that does not reproduce these numbers is
+# The three frozen builds, as verified on the real file after the four group
+# decisions of 22/09/2026: pregnancy-only diagnoses and undefined pregnancy
+# leave the base, insulin is declared, and the two time-since-measurement items
+# return as predictors. A notebook that does not reproduce these numbers is
 # running against a different data file or a different registry, and should
 # stop rather than report a result.
+#
+# For the record, the counts before those decisions were 6,346 / 6,832 / 5,944.
 EXPECTED = {
-    "hypertension": dict(n=6346, prev=0.152),
-    "diabetes":     dict(n=6832, prev=0.038),
-    "cholesterol":  dict(n=5944, prev=0.320),
+    "hypertension": dict(n=6329, prev=0.152),
+    "diabetes":     dict(n=6812, prev=0.038),
+    "cholesterol":  dict(n=5927, prev=0.321),
 }
 
 
@@ -107,13 +111,13 @@ def check_frozen(bundle, tol_n=0, tol_prev=0.002):
     # row undiagnosed. In the registry as shipped, dx_diabetes and
     # dx_cholesterol still carry na_rule = implied:0, which is what produces
     # these two inflated cohorts.
-    PRE_FIX = {"diabetes": 7851, "cholesterol": 7244}
-    if n == PRE_FIX.get(bundle["outcome"]):
+    if n > e["n"] + 200 and bundle["outcome"] in ("diabetes", "cholesterol"):
         raise AssertionError(
-            f"{bundle['outcome']} built {n} rows, expected {e['n']}. This is the "
-            f"pre-fix cohort: set na_rule = mar for dx_{bundle['outcome']} in the "
-            "registry sheet, so the gate is never imputed and rows with an "
-            "undefined gate drop instead.")
+            f"{bundle['outcome']} built {n} rows, expected {e['n']}. A cohort "
+            "this much larger means the gate was imputed: check that "
+            f"dx_{bundle['outcome']} has na_rule = mar in the registry, so an "
+            "unanswered gate leaves the analysis instead of being filled with "
+            "zero and declared undiagnosed.")
 
     assert abs(n - e["n"]) <= tol_n, f"n is {n}, expected {e['n']}"
     assert abs(prev - e["prev"]) <= tol_prev, \

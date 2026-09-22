@@ -14,29 +14,40 @@ OUTCOMES = {
         title="Elevated measured blood pressure",
         definition="systolic `W00407` >= 140 **or** diastolic `W00408` >= 90 mmHg",
         authority="WHO 2021 and Diretrizes Brasileiras de Hipertensao Arterial 2020, identical at 140/90",
-        gate="`Q002` (1 yes, 2 pregnancy-only -> yes, 3 no)",
-        n=6346, prev="15.2%",
+        gate="`Q002` (1 yes, 2 pregnancy-only -> undefined, the row drops, 3 no)",
+        n=6329, prev="15.2%",
         alt="`THRESHOLD = (130, 80)` for the ACC/AHA 2017 cut",
-        dropped="`dx_hypertension`, `med_hypertension_2w`, `last_bp_measure`",
-        note=("`last_bp_measure` is dropped as condition-specific. Task 4 of the task "
-              "list asks for it back; if it returns, `last_glucose_test` has to return "
-              "symmetrically for diabetes. Open with the group."),
+        dropped="`dx_hypertension`, `med_hypertension_2w`",
+        note=("`last_bp_measure` (`Q001`, time since blood pressure was last measured) "
+              "is a predictor again, and `last_glucose_test` returns symmetrically for "
+              "diabetes. Both are health-service contact items rather than examination "
+              "results. Read the coefficient with the caveat Amogh raised: people under "
+              "treatment are often controlled at the time of measurement, so a contact "
+              "variable can carry an inverted association.\n\n"
+              "`Q002 = 2`, told only during pregnancy, no longer counts as diagnosed. "
+              "Those 144 rows leave the base with an undefined gate and are counted in "
+              "the attrition file, as gestational hypertension is a distinct condition. "
+              "The undiagnosed cohort is unaffected: they were already outside it."),
         num="10",
     ),
     "diabetes": dict(
         title="HbA1c at or above the diagnostic threshold",
         definition="`Z034` >= 6.5%",
         authority="SBD and WHO, HbA1c >= 6.5. PNS 2013 has no fasting glucose",
-        gate="`Q030` (1 yes, 2 pregnancy-only -> yes, 3 no)",
-        n=6832, prev="3.8%",
+        gate="`Q030` (1 yes, 2 pregnancy-only -> undefined, the row drops, 3 no)",
+        n=6812, prev="3.8%",
         alt="`THRESHOLD = (6.0,)` for the WHO/IEC prediabetes cut, or `(5.7,)` for ADA",
-        dropped="`dx_diabetes`, `med_diabetes_2w`, `last_glucose_test`",
-        note=("Two things are open. `Q030` code 2, 'only during pregnancy', is coded as "
-              "diagnosed here to match the `Q002` treatment; the alternative reading is "
-              "that a past gestational episode is a risk factor, not current diabetes. "
-              "And insulin (`Q03402`) is absent from the medication block of the "
-              "registry; it needs adding, and excluding from `n_medications` for this "
-              "outcome. Neither is resolved in code."),
+        dropped="`dx_diabetes`, `med_diabetes_insulin`",
+        note=("`Q030 = 2`, told only during pregnancy, no longer counts as diagnosed: "
+              "gestational diabetes is a distinct condition, so those 35 rows leave the "
+              "base with an undefined gate and are counted in the attrition file. The "
+              "undiagnosed cohort is unaffected, since they were already outside it.\n\n"
+              "Insulin (`Q03402`) is now declared as `med_diabetes_insulin`. It is "
+              "condition-specific for this outcome, so it leaves this model and, by the "
+              "counter-rebuilding rule, leaves `n_medications` with it. It stays a "
+              "predictor in the blood pressure and cholesterol models.\n\n"
+              "`last_glucose_test` (`Q029`) is a predictor again, symmetrically with "
+              "`last_bp_measure` in the hypertension model."),
         num="20",
     ),
     "cholesterol": dict(
@@ -44,14 +55,15 @@ OUTCOMES = {
         definition="`Z031` >= 200 mg/dL",
         authority="Conventional screening cut. SBC uses risk-stratified LDL targets rather than one diagnostic value",
         gate="`Q060` (1 yes, 2 no)",
-        n=5944, prev="32.0%",
+        n=5927, prev="32.1%",
         alt="`THRESHOLD = (190,)`; the LDL variant needs `Z033` and a registry change",
         dropped="`dx_cholesterol`",
         note=("PNS 2013 has no lipid-lowering medication item: `Q06204` records a "
-              "recommendation, not use. This model therefore cannot define 'treated' "
-              "the way the other two can, and the lipid definition itself is still open "
-              "in the decision log: TC, LDL, HDL or any abnormal lipid give between 360 "
-              "and 2,331 positives."),
+              "recommendation, not use. This model cannot define 'treated' the way the "
+              "other two can, so no treated or untreated subgroup is reported for this "
+              "outcome. Recorded as a limitation in `05_article/Methods.docx`.\n\n"
+              "The lipid definition itself is still open in the decision log: TC, LDL, "
+              "HDL or any abnormal lipid give between 360 and 2,331 positives."),
         num="30",
     ),
 }
@@ -188,27 +200,30 @@ inside each cross-validation fold and never sees the test rows.
 produced an AUC of 0.86 with sensitivity 1.000; do not compute either counter
 anywhere in this notebook.
 
-## Three findings from testing the shared build, for Amogh
+## What the group decided, 22/09/2026
 
-Reproducing the 15/09/2026 numbers locally turned up three things in the files as
-they stand on the Drive. None is worked around silently; all three are in
-`pns_modelkit.py`, documented at the point of use.
+Four questions were open in the `notes` sheet. All four are now closed, and each
+one is a change to the workbook rather than to any code in this notebook.
 
-1. **The diagnosis gates are still imputed.** `dx_diabetes` and `dx_cholesterol`
-   carry `na_rule = implied:0` in the registry, so an unanswered gate is filled
-   with zero and the row is declared undiagnosed. That is bug 1 of the build
-   note, and it builds 7,851 and 7,244 rows instead of 6,832 and 5,944. Setting
-   both cells to `mar`, as `dx_hypertension` already is, reproduces the reported
-   cohorts exactly. Section 2 stops with this message if it happens.
-2. **One-hot columns and their declared categories disagree on type.**
-   `_roles()` declares the categories as strings and leaves the columns numeric,
-   so `OneHotEncoder` refuses to fit at all. Cast back to string before the
-   encoder.
-3. **Three ordinal orders are declared descending.** `passive_smoke`,
-   `diet_salt_perception` and `smoking_status` were reverse-coded in the values
-   by `_recode_fixes`, but the registry still records the pre-reversal order, and
-   `OrdinalEncoder` rejects unsorted numeric categories. Sorted ascending, which
-   is what 'higher means more exposure' means after that recode.
+1. **`last_bp_measure` and `last_glucose_test` return**, symmetrically:
+   `leak_hypertension` and `leak_diabetes` set to 0 for the respective item.
+2. **Pregnancy-only diagnoses leave the base.** `Q002 = 2` and `Q030 = 2` make
+   the gate undefined instead of counting as diagnosed, and `P005 = 3`, an
+   undefined pregnancy, is excluded alongside `P005 = 1`.
+3. **Insulin is declared** as `med_diabetes_insulin` (`Q03402`), condition-specific
+   for diabetes only.
+4. **Cholesterol has no treated definition**, recorded as a limitation in the
+   Methods.
+
+Three things also came out of testing the shared build and are fixed in
+`pns_modelkit.py`, documented at the point of use: the diagnosis gates were being
+imputed, which inflated two cohorts; the one-hot columns and their declared
+categories disagreed on type, so Layer 2 could not fit; and three ordinal orders
+are declared in the pre-reversal order that `_recode_fixes` already reversed.
+
+`Q031`, `Q061` and `Q06201`–`Q06206` appear in the `outcomes` sheet as
+condition-specific, but were never declared in the registry, so there is nothing
+to drop.
 """))
 
     # ----------------------------------------------------------------- setup
