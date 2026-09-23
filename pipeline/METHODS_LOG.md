@@ -1,5 +1,18 @@
 # Decision log — undiagnosed hypertension, PNS 2013
 
+> **Superseded, 23/09/2026.** This file records the August 2026 hypertension
+> scripts, which `pipeline/pns2013_hypertension_pipeline2.py` and
+> `pipeline3_generic.py` implement. It is kept because the published results of
+> that generation cite it.
+>
+> The current work covers three outcomes over one shared preprocessing:
+> `pns_preprocess.py` reads `PNS_preprocessing_registry_v1.xlsx`, and the twelve
+> notebooks in `notebooks/` model each outcome with four families and four
+> sampling variants. Cohorts are 6,329 at 15.2% for elevated blood pressure,
+> 6,812 at 3.8% for HbA1c, and 5,927 at 32.1% for total cholesterol. The full
+> reasoning lives in `decision_log.md` in the study's shared folder, sections 14
+> to 17; section 17 covers what changed and why.
+
 Project: FAPESP–Illinois NCD study Data: `EXAMES-PNS-2013-FINAL_05052023.xlsx` (lab/exams subsample) \+ variable dictionary Scope: prediction only. No survey weights, no external validation (PNS 2019 has no lab results).
 
 ---
