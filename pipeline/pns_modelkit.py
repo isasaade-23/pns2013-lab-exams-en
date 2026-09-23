@@ -237,6 +237,83 @@ def _at_threshold(y, p, t):
                 TP=int(tp), FP=int(fp), FN=int(fn), TN=int(tn))
 
 
+def confusion_frame(y, p, threshold, labels=("no outcome", "outcome")):
+    """The 2x2 as a labelled table: counts, and the share of each true row.
+
+    The row percentage is the one worth reading. Of the people who do have the
+    outcome, what share does the model flag; of the people who do not, what
+    share does it flag anyway. At 15% prevalence the column percentage looks
+    alarming and says mostly that the outcome is rare.
+    """
+    d = _at_threshold(y, p, threshold)
+    pos, neg = d["TP"] + d["FN"], d["TN"] + d["FP"]
+    frame = pd.DataFrame(
+        [[d["TN"], d["FP"], neg], [d["FN"], d["TP"], pos],
+         [d["TN"] + d["FN"], d["FP"] + d["TP"], neg + pos]],
+        index=[f"true {labels[0]}", f"true {labels[1]}", "total"],
+        columns=[f"predicted {labels[0]}", f"predicted {labels[1]}", "total"])
+    frame.attrs["rates"] = {
+        "threshold": d["threshold"], "sensitivity": d["Sensitivity"],
+        "specificity": d["Specificity"], "PPV": d["PPV"], "NPV": d["NPV"]}
+    return frame
+
+
+def calibration_stats(y, p, eps=1e-6):
+    """Calibration intercept and slope, plus Brier and its skill score.
+
+    Regress the outcome on the logit of the predicted probability. A perfectly
+    calibrated model gives intercept 0 and slope 1. Intercept above 0 means the
+    predictions sit systematically below the observed risk, and below 0 means
+    they sit above it, which is what class-imbalance corrections do: trained on
+    a resampled world with far more cases than the real one, the model reports
+    a risk that population never had. Slope below 1 means the predictions are
+    too spread out, the signature of overfitting.
+
+    This is the pair of numbers that makes the SMOTE question answerable, since
+    AUC is invariant to any monotone rescaling of the probabilities and will not
+    move when calibration breaks.
+    """
+    from sklearn.linear_model import LogisticRegression
+
+    y = np.asarray(y, dtype=float)
+    p = np.clip(np.asarray(p, dtype=float), eps, 1 - eps)
+    logit = np.log(p / (1 - p))
+
+    slope = intercept = np.nan
+    if len(np.unique(y)) == 2:
+        # C very large is an unpenalised fit. The filter silences an
+        # OptimizeWarning some scipy/scikit-learn pairs raise about an
+        # lbfgs option, which says nothing about this fit.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Unknown solver options")
+            lr = LogisticRegression(C=1e12, solver="lbfgs", max_iter=1000)
+            lr.fit(logit.reshape(-1, 1), y)
+        slope = float(lr.coef_[0][0])
+
+        # Calibration in the large: the shift a that makes the mean predicted
+        # risk equal the observed one, with the slope held at 1. Solved by
+        # bisection because sklearn has no offset term; the function is
+        # monotone in a, so a bracket of +/-20 on the logit scale is ample.
+        def mean_pred(a):
+            return float(np.mean(1 / (1 + np.exp(-(a + logit)))))
+
+        target, lo, hi = float(np.mean(y)), -20.0, 20.0
+        for _ in range(200):
+            mid = (lo + hi) / 2
+            if mean_pred(mid) < target:
+                lo = mid
+            else:
+                hi = mid
+        intercept = (lo + hi) / 2
+
+    brier = float(np.mean((p - y) ** 2))
+    base = float(np.mean((np.mean(y) - y) ** 2))
+    return dict(calib_intercept=intercept, calib_slope=slope,
+                Brier=brier, Brier_skill=float(1 - brier / base) if base else np.nan,
+                mean_predicted=float(np.mean(p)), observed=float(np.mean(y)))
+
+
 def bootstrap_auc(y, p, n_boot=1000, alpha=0.05, random_state=RS):
     """Percentile interval on the test AUC, stratified by outcome so every
     draw keeps the same number of positives.
@@ -280,6 +357,10 @@ def evaluate(model, Xte, yte, label, n_boot=1000):
                AUC_lo=lo, AUC_hi=hi,
                PR_AUC=float(average_precision_score(yte, p)),
                Brier=float(brier_score_loss(yte, p)))
+    # AUC does not move when calibration breaks, so it cannot answer whether a
+    # resampling variant helped or hurt. These can.
+    row.update({k: v for k, v in calibration_stats(yte, p).items()
+                if k != "Brier"})
     row.update({f"youden_{k}": v for k, v in _at_threshold(yte, p, t).items()})
     row.update({f"screen90_{k}": v for k, v in
                 screening_point(yte, p, 0.90).items() if k != "rule"})
@@ -361,6 +442,32 @@ def _plt():
     plt.rcParams.update({"figure.dpi": 110, "savefig.dpi": 300,
                          "savefig.bbox": "tight", "font.size": 9})
     return plt
+
+
+def plot_confusion(y, p, threshold, title, path=None,
+                   labels=("no outcome", "outcome")):
+    """The 2x2 at one operating point: count, and share of the true row."""
+    plt = _plt()
+    d = _at_threshold(y, p, threshold)
+    counts = np.array([[d["TN"], d["FP"]], [d["FN"], d["TP"]]], dtype=float)
+    rows = counts.sum(axis=1, keepdims=True)
+    share = np.divide(counts, rows, out=np.zeros_like(counts), where=rows > 0)
+
+    fig, ax = plt.subplots(figsize=(3.6, 3.2))
+    ax.imshow(share, cmap="Blues", vmin=0, vmax=1)
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, f"{int(counts[i, j]):,}\n{share[i, j]:.0%}",
+                    ha="center", va="center",
+                    color="white" if share[i, j] > 0.55 else "black")
+    ax.set_xticks([0, 1], [f"predicted\n{labels[0]}", f"predicted\n{labels[1]}"])
+    ax.set_yticks([0, 1], [f"true\n{labels[0]}", f"true\n{labels[1]}"])
+    ax.set_title(f"{title}\ncut-off {d['threshold']:.3f} · "
+                 f"sens {d['Sensitivity']:.0%} · spec {d['Specificity']:.0%} · "
+                 f"PPV {d['PPV']:.0%}", fontsize=8)
+    if path:
+        fig.savefig(path)
+    return fig
 
 
 def plot_roc(curves, title, path=None):
