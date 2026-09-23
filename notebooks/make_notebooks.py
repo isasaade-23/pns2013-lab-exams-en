@@ -662,8 +662,10 @@ assuming. Three facts, printed before any fit:
 3. **The resolved parameters.** `n_estimators = None` means the checkpoint
    decides, and the current default is 8. That is why passing 8 explicitly
    changed nothing earlier: it was already the default, not an argument being
-   dropped. Row subsampling exists only as an opt-in
-   (`inference_config` with `SUBSAMPLE_SAMPLES`) and is not set here.
+   dropped. The API also **caps** it at 8, rejecting anything larger with
+   `HTTP 422`, so on that backend 8 is both the floor and the ceiling of the
+   ensemble. Row subsampling exists only as an opt-in (`inference_config` with
+   `SUBSAMPLE_SAMPLES`) and is not set here.
 """))
         C.append(code("""
 Xtr_enc = preproc().fit_transform(Xtr)
@@ -719,15 +721,29 @@ row_def, p_def = mk.evaluate(pipe_def, Xte, yte, "TabPFN (default)")
 print(f"default  test AUC {row_def['AUC_test']:.3f} "
       f"[{row_def['AUC_lo']:.3f}, {row_def['AUC_hi']:.3f}]")
 
-# 8 is already the default, so the second configuration has to be bigger
-# than that to mean anything. 32 forward passes, averaged.
-pipe_tuned = Pipeline([("prep", preproc()), ("clf", make_tabpfn(n_estimators=32))])
-pipe_tuned.fit(Xtr, ytr)
-row_tuned, p_tuned = mk.evaluate(pipe_tuned, Xte, yte, "TabPFN (ensemble 32)")
-print(f"ensemble test AUC {row_tuned['AUC_test']:.3f} "
-      f"[{row_tuned['AUC_lo']:.3f}, {row_tuned['AUC_hi']:.3f}]")
+# The second configuration, and which one it can be depends on the backend.
+# The API caps n_estimators at 8 and 8 is also the default, so there is no
+# larger ensemble to ask for: the only contrast left is downward, a single
+# forward pass against the ensemble of eight, which says what the ensembling
+# is worth. Locally there is no cap, so 32 is used.
+ALT = 32 if BACKEND == "local" else 1
+ALT_LABEL = f"ensemble {ALT}" if ALT > 1 else "single pass"
 
-BEST_MODEL, BEST_P, BEST_PARAMS = pipe_tuned, p_tuned, {"n_estimators": 32,
+pipe_alt = Pipeline([("prep", preproc()), ("clf", make_tabpfn(n_estimators=ALT))])
+pipe_alt.fit(Xtr, ytr)
+row_alt, p_alt = mk.evaluate(pipe_alt, Xte, yte, f"TabPFN ({ALT_LABEL})")
+print(f"{ALT_LABEL:<13} test AUC {row_alt['AUC_test']:.3f} "
+      f"[{row_alt['AUC_lo']:.3f}, {row_alt['AUC_hi']:.3f}]")
+
+# The bigger ensemble is the base for the variants. When the alternative is the
+# single pass, that is the default of 8, chosen on the configuration rather than
+# on the test score, which would be selection on the outcome.
+if ALT > 1:
+    pipe_tuned, row_tuned, p_tuned, n_best = pipe_alt, row_alt, p_alt, ALT
+else:
+    pipe_tuned, row_tuned, p_tuned, n_best = pipe_def, row_def, p_def, 8
+
+BEST_MODEL, BEST_P, BEST_PARAMS = pipe_tuned, p_tuned, {"n_estimators": n_best,
                                                         "backend": BACKEND}
 """))
         C.append(md("""
@@ -781,7 +797,7 @@ it, and the lever is elsewhere — in the outcome definition, not the sampler.
     expensive = ('\nEXPENSIVE_VARIANTS = False   # bagging and calib cost 10 and 5 API fits\n'
                  if model == "tabpfn" else "")
     tabpfn_guard = ("and EXPENSIVE_VARIANTS " if model == "tabpfn" else "")
-    final_est = ("make_tabpfn(n_estimators=32)" if model == "tabpfn"
+    final_est = ("make_tabpfn(n_estimators=n_best)" if model == "tabpfn"
                  else "make_est(suggest(optuna.trial.FixedTrial(best)))")
     C.append(code(f"""
 !pip install -q imbalanced-learn
