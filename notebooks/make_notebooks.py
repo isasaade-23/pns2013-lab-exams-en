@@ -130,8 +130,12 @@ MODELS = {
         imports="from xgboost import XGBClassifier",
         default_est="XGBClassifier(scale_pos_weight=SPW, eval_metric='logloss',\n                       n_jobs=-1, random_state=mk.RS)",
         est_fn=("def make_est(params):\n"
-                "    return XGBClassifier(scale_pos_weight=SPW, eval_metric='logloss',\n"
-                "                         n_jobs=-1, random_state=mk.RS, **params)"),
+                "    # scale_pos_weight is part of the search space now, so it arrives\n"
+                "    # inside params; SPW is only the fallback when it does not\n"
+                "    p = dict(params)\n"
+                "    p.setdefault('scale_pos_weight', SPW)\n"
+                "    return XGBClassifier(eval_metric='logloss', n_jobs=-1,\n"
+                "                         random_state=mk.RS, **p)"),
         space=("def suggest(t):\n"
                "    return {'n_estimators': t.suggest_int('n_estimators', 150, 1200, log=True),\n"
                "            'learning_rate': t.suggest_float('learning_rate', 0.003, 0.3, log=True),\n"
@@ -427,6 +431,16 @@ age spline **{'on' if m['spline'] else 'off'}**.
 **What to look for.** Train and test prevalence should match to a decimal. The
 preprocessor is passed *into* the pipeline, never fitted here.
 """))
+    # REPEATS exists only where there is a search to quieten; TabPFN has none
+    cv_block = ("cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=mk.RS)\n"
+                "cv_report = cv" if model == "tabpfn" else
+                "# REPEATS > 1 gives the search a quieter target to optimise. One 5-fold\n"
+                "# pass is noisy enough that a lucky split can outrank a better model.\n"
+                "cv = (RepeatedStratifiedKFold(n_splits=5, n_repeats=REPEATS,\n"
+                "                              random_state=mk.RS)\n"
+                "      if REPEATS > 1 else\n"
+                "      StratifiedKFold(n_splits=5, shuffle=True, random_state=mk.RS))\n"
+                "cv_report = StratifiedKFold(n_splits=5, shuffle=True, random_state=mk.RS)")
     C.append(code(f"""
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import (RepeatedStratifiedKFold, StratifiedKFold,
@@ -435,12 +449,7 @@ from sklearn.model_selection import (RepeatedStratifiedKFold, StratifiedKFold,
 Xtr, Xte, ytr, yte = mk.split(bundle)
 SPW = mk.pos_weight(ytr)
 
-# REPEATS > 1 gives the search a quieter target to optimise. One 5-fold pass is
-# noisy enough that a lucky split can outrank a better model.
-cv = (RepeatedStratifiedKFold(n_splits=5, n_repeats=REPEATS, random_state=mk.RS)
-      if REPEATS > 1 else
-      StratifiedKFold(n_splits=5, shuffle=True, random_state=mk.RS))
-cv_report = StratifiedKFold(n_splits=5, shuffle=True, random_state=mk.RS)
+{cv_block}
 
 def preproc():
     return mk.preprocessor(bundle, spline={m['spline']}, scale={m['scale']})
