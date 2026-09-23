@@ -129,8 +129,14 @@ for outcome in OUTCOMES:
         fam, _, var = folder.partition("_")
         d["outcome"] = outcome
         d["family"] = fam
-        if "variant" not in d or d["variant"].isna().all():
+        # Where the variant came from matters later: a file that declares it is
+        # a one-row export from a run with variants, and a file that does not is
+        # an older export holding both the default and the tuned fit.
+        if "variant" in d and d["variant"].notna().any():
+            d["declared_variant"] = True
+        else:
             d["variant"] = var or "base"
+            d["declared_variant"] = False
         d["source"] = os.path.relpath(f, BASE)
         rows.append(d)
 
@@ -157,13 +163,39 @@ resampling variant paid for itself: a variant that moved AUC by nothing and
 pushed the intercept away from zero made the model worse, not better.
 """))
 C.append(code("""
-best = raw[~raw["model"].str.contains("default|untuned", case=False, na=False)].copy()
+# Which rows are the reported ones.
+#
+# A run exported with variants writes one file per variant, each holding a
+# single row, and the variant column says which. Those rows are all kept, with
+# one exception: "untuned", the library-default fit, which is a comparison
+# rather than a result.
+#
+# A run exported before the variants existed writes both the default and the
+# tuned fit into one file and carries no variant column. There the tuned row is
+# the reported one, and the default is dropped by its label.
+#
+# The label cannot be used on the newer rows: TabPFN has no search, so its
+# reported model is called "TabPFN (default)" and filtering on the word would
+# throw the whole family away.
+declared = raw["declared_variant"].fillna(False).astype(bool)
+labelled_default = raw["model"].str.contains("default|untuned", case=False, na=False)
+
+best = raw[(declared & (raw["variant"] != "untuned"))
+           | (~declared & ~labelled_default)].copy()
+print(f"{len(best)} reported rows, {len(raw) - len(best)} comparison rows set aside")
 
 cols = ["outcome", "family", "variant", "AUC_test", "AUC_lo", "AUC_hi", "PR_AUC",
         "Brier", "calib_intercept", "calib_slope", "prevalence",
         "youden_Sensitivity", "youden_Specificity", "youden_PPV",
         "screen90_Sensitivity", "screen90_Specificity", "screen90_PPV",
         "n_train_plus_test", "n_predictors", "run_utc"]
+# One line per cell of the grid. Two runs of the same cell can carry different
+# model labels, as TabPFN does when the second configuration changed from an
+# ensemble to a single pass, so the label cannot be part of the key here: the
+# cell is the outcome, the family and the variant, and the most recent run wins.
+best = (best.sort_values("run_utc")
+            .drop_duplicates(["outcome", "family", "variant"], keep="last"))
+
 table = (best[[c for c in cols if c in best]]
          .sort_values(["outcome", "family", "variant"])
          .reset_index(drop=True))
@@ -301,9 +333,8 @@ for outcome in outs:
     for i, fam in enumerate(fams):
         for j, var in enumerate(variants):
             ax = axes[i][j]
-            src = raw[(raw["outcome"] == outcome) & (raw["family"] == fam)
-                      & (raw["variant"] == var)
-                      & ~raw["model"].str.contains("default|untuned", case=False, na=False)]
+            src = best[(best["outcome"] == outcome) & (best["family"] == fam)
+                       & (best["variant"] == var)]
             if src.empty or f"{POINT}_TP" not in src:
                 ax.axis("off")
                 continue
